@@ -1,0 +1,74 @@
+.container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: linear-gradient(to bottom, #FFB74D, #FF9800);
+}
+
+.login-form {
+    background-color: white;
+    padding: 20px;
+    border-radius: 0;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    max-width: 400px;
+    width: 100%;
+}
+
+.login-form h2 {
+    text-align: center;
+    color: #333;
+}
+
+.login-form form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.login-form input[type="email"],
+.login-form input[type="password"] {
+    padding: 8px;
+    border: none;
+    border-radius: 8px;
+    background-color: #f5f5f5;
+}
+
+.login-form button[type="submit"] {
+    padding: 10px;
+    background-color: cadetblue;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.login-form button[type="submit"]:hover {
+    background-color: darkblue;
+}
+
+.signup-option {
+    margin-top: 20px;
+    color: black;
+    text-align: center;
+    font-size: 14px;
+}
+
+.signup-option p {
+    margin-bottom: 10px;
+}
+
+.signup-option button {
+    color: white;
+    background-color: cadetblue;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.signup-option button:hover {
+    background-color: darkblue;
+}

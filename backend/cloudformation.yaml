@@ -1,0 +1,1016 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  # Set up an Amazon Simple Notification Service (SNS) to enable email notifications.
+  snsservice:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: notification-service
+      FifoTopic: false
+      TopicName: cloudtermsns
+      Subscription:
+        - Protocol: email
+          Endpoint: vs521639@dal.ca
+
+  # Creating cognito user pool to store the user's credentials.
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: cloudtermprojectuserpool
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: cloudtermassignmentapp
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+
+  # Creating S3 bucket to store the images.
+  s3bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: cloudtermbucket1
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            MaxAge: 3000
+            AllowedHeaders:
+              - "*"
+            ExposedHeaders:
+              - "Authorization"
+
+  # Creating a lambda function "login" to check the user's credentials.
+  login:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: login.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: login
+      Handler: login.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          APP_CLIENT_ID: !Ref CognitoUserPoolClient
+
+  # Creating a lambda function "register" to register the user's credentials.
+  register:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: register.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: register
+      Handler: register.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          APP_CLIENT_ID: !Ref CognitoUserPoolClient
+          SNS_TOPIC_ARN: !Ref snsservice
+
+  #creating a lambda function "logout" to log out the user.
+  logout:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: logout.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: logout
+      Handler: logout.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+
+  #creating a lambda function "rekognition" to detect the face in the image.
+  rekognition:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: rekognition.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: rekognition
+      Handler: rekognition.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref snsservice
+
+  #creating a lambda function "s3upload" to upload the image to s3 bucket.
+  s3upload:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: s3upload.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: s3upload
+      Handler: s3upload.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          S3_BUCKET_NAME: !Ref s3bucket
+          REKOGNITION_FUNCTION_NAME: !Ref rekognition
+
+
+  #creating a lambda function "verifycode" to verify the One Time Password.
+  verifycode:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: verifycode.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: verifycode
+      Handler: verifycode.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          APP_CLIENT_ID: !Ref CognitoUserPoolClient
+          TABLE_NAME: !Ref users
+          SNS_TOPIC_ARN: !Ref snsservice
+
+  #creating a lambda function "verifytoken" to verify the session token.
+  verifytoken:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: cloudterms3
+        S3Key: verifytoken.zip
+      Role: "arn:aws:iam::345298613551:role/LabRole"
+      FunctionName: verifytoken
+      Handler: verifytoken.lambda_handler
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          SNSTopicArn: !Ref snsservice
+
+  #DynamoDB table to store the user's credentials.
+  users:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "email"
+          KeyType: "HASH"
+      TableName: "users"
+      ProvisionedThroughput:
+        ReadCapacityUnits: '2'
+        WriteCapacityUnits: '2'
+
+
+  #API Gateway to handle the requests.
+  celebdetectgateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: "celebdetectgateway"
+      Description: "API gateway for celebdetect web application"
+
+  # API Gateway Global to handle 4xx
+  celebdetectresponse4xx:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      ResponseType: DEFAULT_4XX
+      RestApiId: !Ref celebdetectgateway
+      # StatusCode: String
+
+  # API Gateway Global to handle 5xx
+  celebdetectresponse5xx:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+      ResponseType: DEFAULT_5XX
+      RestApiId: !Ref celebdetectgateway
+      # StatusCode: String
+
+  #API Gateway resource for login functionaity
+  loginresource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "login"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for login functionality
+  loginmethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref loginresource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${login.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for login method OPTIONS
+  loginmethodOPTIONS:
+    Type : "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref loginresource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${login.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #API Gateway resource for register functionality
+  registerresource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "register"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for register functionality
+  registermethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref registerresource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${register.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for register method OPTIONS
+  registermethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref registerresource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${register.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #API Gateway resource for logout functionality
+  logoutresource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "logout"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for logout functionality
+  logoutmethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref logoutresource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${logout.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for logout method OPTIONS
+  logoutmethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref logoutresource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${logout.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #API Gateway resource for upload functionality
+  uploadresource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "upload"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for upload functionality
+  uploadmethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref uploadresource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${s3upload.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for upload method OPTIONS
+  uploadmethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref uploadresource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${s3upload.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #API Gateway resource for verifycode functionality
+  verifycoderesource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "verifycode"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for verifycode functionality
+  verifycodemethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref verifycoderesource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 403
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 404
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${verifycode.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for verifycode method OPTIONS
+  verifycodemethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref verifycoderesource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 403
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 404
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${verifycode.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 403
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #API Gateway resource for verifytoken functionality
+  verifytokenresource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - celebdetectgateway
+        - RootResourceId
+      PathPart: "verifytoken"
+      RestApiId: !Ref celebdetectgateway
+
+  #API Service Gateway Method for verifytoken functionality
+  verifytokenmethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref verifytokenresource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${verifytoken.Arn}/invocations"
+        RequestTemplates:
+          application/json:
+            "{
+              \"body\": $input.json('$')
+            }"
+        PassthroughBehavior: "WHEN_NO_TEMPLATES"
+        RequestParameters:
+          "integration.request.header.Content-Type": "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # API Service Gateway Method for verifytoken method OPTIONS
+  verifytokenmethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      ResourceId: !Ref verifytokenresource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 401
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${verifytoken.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 401
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # deploying the celebdetect Gateway
+  gatewaydeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref celebdetectgateway
+      StageName: prod
+    DependsOn:
+      - loginmethod
+      - loginmethodOPTIONS
+      - registermethod
+      - registermethodOPTIONS
+      - logoutmethod
+      - logoutmethodOPTIONS
+      - uploadmethod
+      - uploadmethodOPTIONS
+      - verifycodemethod
+      - verifycodemethodOPTIONS
+      - verifytokenmethod
+      - verifytokenmethodOPTIONS
+      - celebdetectresponse4xx
+      - celebdetectresponse5xx
+
+  # Provide gateway lambda permission for login lambda function
+  logingatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt login.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  # Provide gateway lambda permission for register lambda function
+  registergatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt register.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  # Provide gateway lambda permission for logout lambda function
+  logoutgatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt logout.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  # Provide gateway lambda permission for upload lambda function
+  uploadgatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt s3upload.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  # Provide gateway lambda permission for verifycode lambda function
+  verifycodegatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt verifycode.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  # Provide gateway lambda permission for verifytoken lambda function
+  verifytokengatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt verifytoken.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - gatewaydeployment
+
+  #To create a security group for ec2 instance
+  securitygroupec2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "security group for ec2 compute resource"
+      GroupName: ec2securitygroup
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+
+  #To create a ec2 instance
+  celebdetectec2:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - celebdetectgateway
+    Properties:
+      ImageId: ami-053b0d53c279acc90
+      InstanceType: t2.micro
+      KeyName: vockey
+      SecurityGroups:
+        - !Ref securitygroupec2
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          git clone https://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@github.com/vasumakwana/termassignment.git
+          cd termassignment/frontend
+          sudo apt-get update
+          sudo apt install npm -y
+          sudo npm i
+          sudo apt-get install -y awscli
+          sudo apt-get install jq -y
+          aws configure set aws_access_key_id ASIAVAZLGWUX5SYN4B6B
+          aws configure set aws_secret_access_key 4cEM7/DgpTBdD39EDjYMgoiDED0F1igAvlKgie8t
+          aws configure set aws_session_token FwoGZXIvYXdzECgaDMqUlYYfyPwbgkObQyLAAfBD+3nbyOkF9SMAOCPNIrvlkV6rWgUB7NMc1eL4xrJuDOeNzBSOEAP8jiBu2I/RgprYxqCczaYfB5QWVRHJtZxmkcOPc89IO73ld+KE6pYFX+BO8rYAclith2yJMehBwWlI3YKYx+uK+ln7h1ZWWv9+SaDjz3bBHHy+vsyBT3vnzpejYzcuomGvG6/6KBPobOBDdaeGpvj/bd2OKs4i84KOIJtfwrhttRF5+wDqq3dDoaaTGUqg9asTTQACfx3r1iiKvpumBjItgS5mix9O5C/6ikmFJ+fTTrL1jiAzH1qXYHd6IwZtvFuwdYYD3Uvv+FC6GR/Z
+          aws configure set region us-east-1
+          gatewayid=$(aws apigateway get-rest-apis | jq -r '.items[] | select(.name=="celebdetectgateway") | .id')
+          REACT_APP_PRODLINK="REACT_APP_PRODLINK=https://${gatewayid}.execute-api.us-east-1.amazonaws.com/prod"
+          echo $REACT_APP_PRODLINK >> .env
+          sudo npm start
